@@ -299,8 +299,11 @@ resource "proxmox_vm_qemu" "control_plane" {
 }
 
 resource "proxmox_vm_qemu" "worker" {
-  depends_on = [terraform_data.capacity_assertions]
-  for_each   = { for n in local.workers : n.name => n }
+  depends_on = [
+    terraform_data.capacity_assertions,
+    proxmox_vm_qemu.control_plane
+  ]
+  for_each = { for n in local.workers : n.name => n }
 
   target_node = local.effective_target_node_for[each.key]
   description = "Talos Worker (${var.cluster_name})"

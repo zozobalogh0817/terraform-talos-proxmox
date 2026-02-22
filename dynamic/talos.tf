@@ -48,14 +48,6 @@ resource "talos_machine_configuration_apply" "control_plane" {
   node                        = each.value.default_ipv4_address
   endpoint                    = each.value.default_ipv4_address
 
-  config_patches = [
-    yamlencode({
-      machine = {
-        node_name = each.key
-      }
-    })
-  ]
-
   depends_on = [
     data.talos_client_configuration.this
   ]
@@ -67,14 +59,6 @@ resource "talos_machine_configuration_apply" "worker" {
   machine_configuration_input = data.talos_machine_configuration.worker.machine_configuration
   node                        = each.value.default_ipv4_address
   endpoint                    = each.value.default_ipv4_address
-
-  config_patches = [
-    yamlencode({
-      machine = {
-        node_name = each.key
-      }
-    })
-  ]
 
   depends_on = [
     talos_machine_configuration_apply.control_plane
