@@ -85,36 +85,99 @@ To maintain a clean boot environment and prevent unintended re-installations, th
 
 ## Configuration Variables
 
+The following variables are defined in `config.tf` and `providers.tf` to govern the behavior and sizing of the infrastructure.
+
+### Provider Authentication
+
+These variables are required for authenticating with the Proxmox API. It is recommended to provide these via a `.tfvars` file or environment variables.
+
+| Variable | Type | Sensitive | Description |
+| :--- | :--- | :--- | :--- |
+| `proxmox_api_url` | `string` | No | The full URL of the Proxmox API (e.g., `https://pve.example.com:8006/api2/json`). |
+| `proxmox_api_token_id` | `string` | Yes | Proxmox API Token ID (e.g., `terraform@pam!mytoken`). |
+| `proxmox_api_token_secret` | `string` | Yes | Proxmox API Token Secret. |
+
+### Global Cluster Configuration
+
+| Variable | Type | Default | Description | Constraints / Validation |
+| :--- | :--- | :--- | :--- | :--- |
+| `cluster_name` | `string` | - | Logical identifier for the cluster. Affects VM names, Talos cluster name, and tags. | Min 3 chars, lowercase, numbers, and hyphens only. |
+| `environment` | `string` | `"lab"` | Logical stage of the deployment. | Must be one of: `dev`, `lab`, `prod`. |
+| `ha_enabled` | `bool` | `true` | Enables High Availability constraints for the control plane. | - |
+
+### Scaling and Resource Allocation
+
+| Variable | Type | Default | Description | Constraints / Validation |
+| :--- | :--- | :--- | :--- | :--- |
+| `control_plane_count` | `number` | `3` | Number of control plane nodes (etcd members). | If `ha_enabled=true`: must be odd and $\ge 3$. Else $\ge 1$. Max 7. |
+| `worker_count` | `number` | `2` | Number of worker nodes to provision. | Must be $\ge 0$. |
+| `sizing` | `object` | *See below* | Resource profiles for each node role. | - |
+
+**Sizing Default Profile:**
+```hcl
+sizing = {
+  control_plane = { vcpu = 2, memory = 4096, disk = 40 }
+  worker        = { vcpu = 2, memory = 4096, disk = 40 }
+}
+```
+
+**Sizing Constraints:**
+- **Control Plane**: Minimum 2 vCPU, 2048MB RAM, 20GB disk.
+- **Worker**: Minimum 1 vCPU, 1024MB RAM, 20GB disk.
+
 ### Proxmox Infrastructure (`proxmox` object)
 
-- **`endpoint`**: The API endpoint of the Proxmox VE cluster.
-- **`insecure`**: Boolean to toggle TLS verification for self-signed certificates.
-- **`target_nodes`**: A list of physical host names where VMs can be placed.
-- **`datastore_id`**: The Proxmox storage identifier for VM disks.
-- **`bridge`**: The network bridge for VM connectivity.
-- **`vlan_id`**: Optional VLAN tag for network isolation.
+| Attribute | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `endpoint` | `string` | - | The base URL of the Proxmox cluster (e.g., `https://192.168.1.10:8006`). |
+| `insecure` | `bool` | `false` | Disable TLS certificate verification. |
+| `target_nodes` | `list(string)` | - | List of physical Proxmox nodes available for VM placement. |
+| `datastore_id` | `string` | - | Identifier of the Proxmox storage where VM disks will be created. |
+| `bridge` | `string` | - | Name of the Linux Bridge on Proxmox for VM networking (e.g., `vmbr0`). |
+| `vlan_id` | `number` | `null` | Optional VLAN tag to apply to the VM network interfaces. |
 
-### Cluster Governance and Sizing
+### Placement and Scheduling
 
-- **`cluster_name`**: Logical name for the cluster, used for naming resources and Talos identity.
-- **`environment`**: Deployment stage (e.g., `production`, `lab`).
-- **`ha_enabled`**: Enforces High Availability constraints (minimum 3 control plane nodes, must be an odd number).
-- **`control_plane_count`**: Number of master nodes.
-- **`worker_count`**: Number of worker nodes.
-- **`pve_capacity`**: A definitive map of physical host resources (vCPU and Memory in MB), used for scheduling validation.
-- **`sizing`**: Resource profiles for each node role:
-    - `control_plane`: Specifies vCPU cores, Memory (MB), and Disk size (GB).
-    - `worker`: Specifies vCPU cores, Memory (MB), and Disk size (GB).
+| Variable | Type | Default | Description | Constraints / Validation |
+| :--- | :--- | :--- | :--- | :--- |
+| `placement` | `object` | *See below* | Defines the scheduling strategy and manual overrides. | `strategy` must be: `round_robin`, `spread`, or `pin`. |
+| `pve_capacity` | `map(object)` | - | Authoritative map of physical host resources (vCPU and Memory in MB). | Must not be empty. |
 
-### Placement Policy
+**Placement Defaults:**
+```hcl
+placement = {
+  strategy = "spread"
+  pinned   = {}
+}
+```
 
-- **`placement.strategy`**:
-    - `spread`: Evenly distributes VMs across target nodes.
-    - `pin`: Respects explicit node assignments defined in the `pinned` mapping.
+**Pinned Placement Example:**
+
+When using the `pin` strategy, you can explicitly map VM IDs to specific Proxmox nodes:
+
+```hcl
+placement = {
+  strategy = "pin"
+  pinned   = {
+    401 = "pve-node1"  # Control Plane 1 on pve-node1
+    402 = "pve-node2"  # Control Plane 2 on pve-node2
+    403 = "pve-node3"  # Control Plane 3 on pve-node3
+    501 = "pve-node1"  # Worker 1 on pve-node1
+    502 = "pve-node2"  # Worker 2 on pve-node2
+  }
+}
+```
+
+**Placement Strategies:**
+- `spread`: Automatically distributes nodes to maximize host diversity.
+- `round_robin`: Cycles through available hosts sequentially.
+- `pin`: Respects explicit VM-to-Host mappings defined in the `pinned` map.
 
 ### Talos Configuration (`talos` object)
 
-- **`iso`**: The path to the Talos Linux ISO image on the Proxmox storage (e.g., `local:iso/talos-1.9.0.iso`).
+| Attribute | Type | Description |
+| :--- | :--- | :--- |
+| `iso` | `string` | Path to the Talos Linux ISO image on the Proxmox storage (e.g., `local:iso/talos.iso`). |
 
 ## Operational Guide
 
