@@ -36,8 +36,8 @@ variable "control_plane_count" {
 
   validation {
     condition = (
-    (!var.ha_enabled && var.control_plane_count >= 1) ||
-    ( var.ha_enabled && var.control_plane_count >= 3 && var.control_plane_count % 2 == 1)
+      (!var.ha_enabled && var.control_plane_count >= 1) ||
+      (var.ha_enabled && var.control_plane_count >= 3 && var.control_plane_count % 2 == 1)
     )
     error_message = "When ha_enabled=true, control_plane_count must be an odd number >= 3 (3,5,7). When ha_enabled=false, it must be >= 1."
   }
@@ -159,6 +159,7 @@ variable "talos" {
   description = "Talos configuration inputs."
   type = object({
     # Image / boot method
-    iso  = string # where Terraform/Proxmox can fetch it from
+    iso             = string # where Terraform/Proxmox can fetch it from
+    extra_manifests = optional(list(string), [])
   })
 }
