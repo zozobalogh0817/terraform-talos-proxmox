@@ -5,6 +5,34 @@ data "talos_machine_configuration" "control_plane" {
   cluster_endpoint = "https://${proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address}:6443"
   machine_type     = "controlplane"
   machine_secrets  = talos_machine_secrets.this.machine_secrets
+  config_patches = [
+    yamlencode({
+      cluster = {
+        inlineManifests = [
+          {
+            name     = "metallb-native"
+            contents = file("${path.module}/cluster-manifests/metallb-native.yaml")
+          },
+          {
+            name     = "metallb-config"
+            contents = file("${path.module}/cluster-manifests/metallb-config.yaml")
+          },
+          {
+            name     = "argocd-namespace"
+            contents = file("${path.module}/cluster-manifests/argocd-namespace.yaml")
+          },
+          {
+            name     = "argocd-install"
+            contents = file("${path.module}/cluster-manifests/argocd-install.yaml")
+          },
+          {
+            name     = "argocd-service"
+            contents = file("${path.module}/cluster-manifests/argocd-service.yaml")
+          }
+        ]
+      }
+    })
+  ]
 }
 
 data "talos_machine_configuration" "worker" {

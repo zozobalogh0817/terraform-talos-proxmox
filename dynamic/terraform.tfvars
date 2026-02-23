@@ -1,8 +1,8 @@
 cluster_name         = "talos-lab"
 environment          = "lab"
-ha_enabled           = true
-control_plane_count  = 3
-worker_count         = 8
+ha_enabled           = false
+control_plane_count  = 1
+worker_count         = 2
 
 proxmox = {
   endpoint     = "https://192.168.88.64:8006"
