@@ -1,3 +1,4 @@
+/*
 locals {
   # Build role-indexed node descriptors
   control_planes = [
@@ -227,8 +228,12 @@ resource "terraform_data" "capacity_assertions" {
 }
 
 resource "proxmox_vm_qemu" "control_plane" {
-  depends_on = [terraform_data.capacity_assertions]
-  for_each   = { for n in local.control_planes : n.name => n }
+  depends_on = [
+    terraform_data.capacity_assertions,
+    proxmox_storage_iso.talos
+  ]
+
+  for_each = { for n in local.control_planes : n.name => n }
 
   target_node = local.effective_target_node_for[each.key]
   description = "Talos Control Plane (${var.cluster_name})"
@@ -271,13 +276,11 @@ resource "proxmox_vm_qemu" "control_plane" {
 
   scsihw = "virtio-scsi-pci"
 
-  # Talos ISO as CD-ROM (works with your current approach)
-  # NOTE: Proxmox expects "storage:iso/filename.iso"
-  # Use var.talos.iso to store that string (e.g. "local:iso/talos.iso")
+  # Talos ISO as CD-ROM (generated via Talos Image Factory)
   disk {
     slot = "ide2"
     type = "cdrom"
-    iso  = var.talos.iso
+    iso  = "${proxmox_storage_iso.talos[local.effective_target_node_for[each.key]].storage}:iso/${proxmox_storage_iso.talos[local.effective_target_node_for[each.key]].filename}"
   }
 
   efidisk {
@@ -300,7 +303,6 @@ resource "proxmox_vm_qemu" "control_plane" {
 
 resource "proxmox_vm_qemu" "worker" {
   depends_on = [
-    terraform_data.capacity_assertions,
     proxmox_vm_qemu.control_plane
   ]
   for_each = { for n in local.workers : n.name => n }
@@ -347,7 +349,7 @@ resource "proxmox_vm_qemu" "worker" {
   disk {
     slot = "ide2"
     type = "cdrom"
-    iso  = var.talos.iso
+    iso  = "${proxmox_storage_iso.talos[local.effective_target_node_for[each.key]].storage}:iso/${proxmox_storage_iso.talos[local.effective_target_node_for[each.key]].filename}"
   }
 
   efidisk {
@@ -429,3 +431,4 @@ output "ip_by_worker" {
   }
   description = "DHCP IPv4 address for worker reported by Proxmox provider (usually via guest agent)"
 }
+*/

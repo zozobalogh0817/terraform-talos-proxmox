@@ -1,8 +1,8 @@
 cluster_name        = "talos-lab"
 environment         = "lab"
-ha_enabled          = true
-control_plane_count = 3
-worker_count        = 2
+ha_enabled          = false
+control_plane_count = 1
+worker_count        = 1
 
 proxmox = {
   endpoint     = "https://192.168.88.64:8006"
@@ -28,14 +28,18 @@ pve_capacity = {
 }
 
 talos = {
-  iso = "local:iso/talos-qemu-agent-metal-amd64.iso"
+  version  = "v1.12.4"
+  platform = "metal"
+  arch     = "amd64"
   extra_manifests = [
     "https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml",
     "https://github.com/cert-manager/cert-manager/releases/download/v1.19.3/cert-manager.yaml",
     "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.14.3/deploy/static/provider/cloud/deploy.yaml",
-    /*
-    "https://raw.githubusercontent.com/longhorn/longhorn/v1.11.0/deploy/longhorn.yaml",
-    "https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.8.1/components.yaml"
-     */
+    #"https://raw.githubusercontent.com/longhorn/longhorn/v1.11.0/deploy/longhorn.yaml",
+  ]
+  extensions = [
+    "siderolabs/qemu-guest-agent",
+    "siderolabs/iscsi-tools",
+    "siderolabs/util-linux-tools",
   ]
 }

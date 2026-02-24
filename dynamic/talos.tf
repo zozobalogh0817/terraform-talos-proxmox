@@ -1,6 +1,11 @@
+/* only remove this
 resource "talos_machine_secrets" "this" {}
 
 data "talos_machine_configuration" "control_plane" {
+  depends_on = [
+    data.talos_image_factory_urls.this
+  ]
+
   cluster_name     = var.cluster_name
   cluster_endpoint = "https://${proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address}:6443"
   machine_type     = "controlplane"
@@ -21,22 +26,19 @@ data "talos_machine_configuration" "control_plane" {
             name     = "nginx-ingress-config"
             contents = file("${path.module}/cluster-manifests/nginx-ingress-config.yaml")
           },
-          /*
           {
-            name     = "longhorn-config"
-            contents = file("${path.module}/cluster-manifests/longhorn-config.yaml")
-          },
-          {
-            name     = "metrics-server-config"
-            contents = file("${path.module}/cluster-manifests/metrics-server-config.yaml")
+            name     = "longhorn-namespace"
+            contents = file("${path.module}/cluster-manifests/longhorn-namespace.yaml")
           }
-           */
         ]
         extraManifests = var.talos.extra_manifests
       }
     }),
     yamlencode({
       machine = {
+        install = {
+          image = data.talos_image_factory_urls.this.urls.installer
+        }
         kubelet = {
           extraMounts = [
             {
@@ -53,6 +55,10 @@ data "talos_machine_configuration" "control_plane" {
 }
 
 data "talos_machine_configuration" "worker" {
+  depends_on = [
+    data.talos_image_factory_urls.this
+  ]
+
   cluster_name     = var.cluster_name
   cluster_endpoint = "https://${proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address}:6443"
   machine_type     = "worker"
@@ -60,6 +66,9 @@ data "talos_machine_configuration" "worker" {
   config_patches = [
     yamlencode({
       machine = {
+        install = {
+          image = data.talos_image_factory_urls.this.urls.installer
+        }
         kubelet = {
           extraMounts = [
             {
@@ -76,10 +85,14 @@ data "talos_machine_configuration" "worker" {
 }
 
 data "talos_client_configuration" "this" {
+  depends_on = [
+    proxmox_vm_qemu.control_plane
+  ]
+
   cluster_name         = var.cluster_name
   client_configuration = talos_machine_secrets.this.client_configuration
   nodes                = [proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address]
-  endpoints            = [proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address]
+  endpoints            = [for cp in local.control_planes : proxmox_vm_qemu.control_plane[cp.name].default_ipv4_address]
 }
 
 resource "local_file" "secrets_yaml" {
@@ -102,6 +115,7 @@ resource "local_file" "talosconfig" {
   filename = "${path.module}/talos/talosconfig"
 }
 
+/*
 resource "talos_machine_configuration_apply" "control_plane" {
   for_each                    = proxmox_vm_qemu.control_plane
   client_configuration        = talos_machine_secrets.this.client_configuration
@@ -150,4 +164,4 @@ resource "talos_cluster_kubeconfig" "this" {
 resource "local_file" "kubeconfig" {
   content  = talos_cluster_kubeconfig.this.kubeconfig_raw
   filename = "${path.module}/talos/kubeconfig"
-}
+}*/
