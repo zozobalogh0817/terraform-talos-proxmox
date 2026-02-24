@@ -162,7 +162,12 @@ variable "talos" {
     version         = optional(string, "v1.9.4")
     arch            = optional(string, "amd64")
     platform        = optional(string, "metal")
-    extra_manifests = optional(list(string), [])
-    extensions      = optional(list(string), [])
+    extra_manifests  = optional(list(string), [])
+    inline_manifests = optional(list(object({
+      name = string
+      file = string
+    })), [])
+    extensions       = optional(list(string), [])
+    machine          = optional(any, {})
   })
 }

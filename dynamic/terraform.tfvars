@@ -32,14 +32,29 @@ talos = {
   platform = "metal"
   arch     = "amd64"
   extra_manifests = [
-    "https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml",
-    "https://github.com/cert-manager/cert-manager/releases/download/v1.19.3/cert-manager.yaml",
-    "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.14.3/deploy/static/provider/cloud/deploy.yaml",
-    #"https://raw.githubusercontent.com/longhorn/longhorn/v1.11.0/deploy/longhorn.yaml",
+    "https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml"
+  ]
+  inline_manifests = [
+    {
+      name = "metallb-config"
+      file = "cluster-manifests/metallb-config.yaml"
+    }
   ]
   extensions = [
     "siderolabs/qemu-guest-agent",
     "siderolabs/iscsi-tools",
     "siderolabs/util-linux-tools",
   ]
+  machine = {
+    kubelet = {
+      extraMounts = [
+        {
+          destination = "/var/lib/longhorn"
+          type        = "bind"
+          source      = "/var/lib/longhorn"
+          options     = ["bind", "rshared", "rw"]
+        }
+      ]
+    }
+  }
 }

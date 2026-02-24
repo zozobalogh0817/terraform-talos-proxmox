@@ -1,4 +1,3 @@
-/*
 locals {
   # Build role-indexed node descriptors
   control_planes = [
@@ -431,4 +430,3 @@ output "ip_by_worker" {
   }
   description = "DHCP IPv4 address for worker reported by Proxmox provider (usually via guest agent)"
 }
-*/

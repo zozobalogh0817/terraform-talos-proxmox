@@ -1,4 +1,3 @@
-/* only remove this
 resource "talos_machine_secrets" "this" {}
 
 data "talos_machine_configuration" "control_plane" {
@@ -14,42 +13,23 @@ data "talos_machine_configuration" "control_plane" {
     yamlencode({
       cluster = {
         inlineManifests = [
-          {
-            name     = "metallb-config"
-            contents = file("${path.module}/cluster-manifests/metallb-config.yaml")
-          },
-          {
-            name     = "cert-manager-config"
-            contents = file("${path.module}/cluster-manifests/cert-manager-config.yaml")
-          },
-          {
-            name     = "nginx-ingress-config"
-            contents = file("${path.module}/cluster-manifests/nginx-ingress-config.yaml")
-          },
-          {
-            name     = "longhorn-namespace"
-            contents = file("${path.module}/cluster-manifests/longhorn-namespace.yaml")
+          for m in var.talos.inline_manifests : {
+            name     = m.name
+            contents = file("${path.module}/${m.file}")
           }
         ]
         extraManifests = var.talos.extra_manifests
       }
     }),
     yamlencode({
-      machine = {
-        install = {
-          image = data.talos_image_factory_urls.this.urls.installer
-        }
-        kubelet = {
-          extraMounts = [
-            {
-              destination = "/var/lib/longhorn"
-              type        = "bind"
-              source      = "/var/lib/longhorn"
-              options     = ["bind", "rshared", "rw"]
-            }
-          ]
-        }
-      }
+      machine = merge(
+        {
+          install = {
+            image = data.talos_image_factory_urls.this.urls.installer
+          }
+        },
+        var.talos.machine
+      )
     })
   ]
 }
@@ -65,21 +45,14 @@ data "talos_machine_configuration" "worker" {
   machine_secrets  = talos_machine_secrets.this.machine_secrets
   config_patches = [
     yamlencode({
-      machine = {
-        install = {
-          image = data.talos_image_factory_urls.this.urls.installer
-        }
-        kubelet = {
-          extraMounts = [
-            {
-              destination = "/var/lib/longhorn"
-              type        = "bind"
-              source      = "/var/lib/longhorn"
-              options     = ["bind", "rshared", "rw"]
-            }
-          ]
-        }
-      }
+      machine = merge(
+        {
+          install = {
+            image = data.talos_image_factory_urls.this.urls.installer
+          }
+        },
+        var.talos.machine
+      )
     })
   ]
 }
@@ -115,7 +88,6 @@ resource "local_file" "talosconfig" {
   filename = "${path.module}/talos/talosconfig"
 }
 
-/*
 resource "talos_machine_configuration_apply" "control_plane" {
   for_each                    = proxmox_vm_qemu.control_plane
   client_configuration        = talos_machine_secrets.this.client_configuration
@@ -164,4 +136,4 @@ resource "talos_cluster_kubeconfig" "this" {
 resource "local_file" "kubeconfig" {
   content  = talos_cluster_kubeconfig.this.kubeconfig_raw
   filename = "${path.module}/talos/kubeconfig"
-}*/
+}
