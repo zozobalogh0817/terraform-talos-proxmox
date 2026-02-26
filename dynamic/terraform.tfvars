@@ -1,8 +1,8 @@
 cluster_name        = "talos-lab"
 environment         = "lab"
-ha_enabled          = false
-control_plane_count = 1
-worker_count        = 1
+ha_enabled          = true
+control_plane_count = 3
+worker_count        = 6
 
 proxmox = {
   endpoint     = "https://192.168.88.64:8006"
@@ -32,6 +32,8 @@ talos = {
   platform = "metal"
   arch     = "amd64"
   extra_manifests = [
+    "https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/main/deploy/standalone-install.yaml",
+    "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml",
     "https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml"
   ]
   inline_manifests = [
@@ -47,6 +49,9 @@ talos = {
   ]
   machine = {
     kubelet = {
+      extraArgs = {
+        rotate-server-certificates = true
+      },
       extraMounts = [
         {
           destination = "/var/lib/longhorn"

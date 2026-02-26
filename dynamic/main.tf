@@ -238,6 +238,7 @@ resource "proxmox_vm_qemu" "control_plane" {
   description = "Talos Control Plane (${var.cluster_name})"
   vmid        = local.vmid_base.cp + (each.value.idx - 1)
   name        = each.key
+  tags = "control-plane,${var.cluster_name}"
 
   memory  = local.sizing_by_role.cp.memory
   balloon = 0
@@ -310,6 +311,7 @@ resource "proxmox_vm_qemu" "worker" {
   description = "Talos Worker (${var.cluster_name})"
   vmid        = local.vmid_base.wk + (each.value.idx - 1)
   name        = each.key
+  tags = "worker,${var.cluster_name}"
 
   memory  = local.sizing_by_role.wk.memory
   balloon = 0
