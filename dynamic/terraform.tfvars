@@ -1,8 +1,8 @@
 cluster_name        = "talos-lab"
 environment         = "lab"
-ha_enabled          = true
-control_plane_count = 3
-worker_count        = 6
+ha_enabled          = false
+control_plane_count = 1
+worker_count        = 2
 
 proxmox = {
   endpoint     = "https://192.168.88.64:8006"
@@ -33,13 +33,24 @@ talos = {
   arch     = "amd64"
   extra_manifests = [
     "https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/main/deploy/standalone-install.yaml",
-    "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml",
-    "https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml"
+    "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml"
   ]
   inline_manifests = [
     {
-      name = "metallb-config"
-      file = "cluster-manifests/metallb-config.yaml"
+      name = "argocd-namespace"
+      file = "cluster-manifests/argocd-namespace.yaml"
+    },
+    {
+      name = "argocd-controller-crb"
+      file = "cluster-manifests/argocd-controller-crb.yaml"
+    },
+    {
+      name = "argocd-installer"
+      file = "cluster-manifests/argocd-installer.yaml"
+    },
+    {
+      name = "argocd-root-app"
+      file = "cluster-manifests/argocd-root-app.yaml"
     }
   ]
   extensions = [
