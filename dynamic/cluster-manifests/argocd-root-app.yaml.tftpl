@@ -7,7 +7,7 @@ metadata:
     argocd.argoproj.io/secret-type: repository
 stringData:
   type: "git"
-  url: "https://github.com/zozobalogh0817/gitops"
+  url: "${repo_url}"
 ---
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -17,9 +17,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/zozobalogh0817/gitops
-    targetRevision: HEAD
-    path: clusters/root
+    repoURL: ${repo_url}
+    targetRevision: ${target_revision}
+    path: ${path}
   destination:
     server: https://kubernetes.default.svc
     namespace: argocd

@@ -67,24 +67,20 @@ talos = {
   control_plane_machine_config = {
     extra_manifests = [
       "https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/main/deploy/standalone-install.yaml",
-      "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml"
+      "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml",
+      "https://github.com/zozobalogh0817/talos-bootstrap/releases/latest/download/argocd-namespace.yaml",
+      "https://github.com/zozobalogh0817/talos-bootstrap/releases/latest/download/argocd-controller-crb.yaml",
+      "https://github.com/zozobalogh0817/talos-bootstrap/releases/latest/download/argocd-installer.yaml"
     ]
     inline_manifests = [
       {
-        name = "argocd-namespace"
-        file = "cluster-manifests/argocd-namespace.yaml"
-      },
-      {
-        name = "argocd-controller-crb"
-        file = "cluster-manifests/argocd-controller-crb.yaml"
-      },
-      {
-        name = "argocd-installer"
-        file = "cluster-manifests/argocd-installer.yaml"
-      },
-      {
         name = "argocd-root-app"
-        file = "cluster-manifests/argocd-root-app.yaml"
+        file = "cluster-manifests/argocd-root-app.yaml.tftpl"
+        variables = {
+          repo_url        = "https://github.com/zozobalogh0817/gitops"
+          target_revision = "HEAD"
+          path            = "clusters/root"
+        }
       }
     ]
     vip = {

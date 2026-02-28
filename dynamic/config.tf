@@ -173,6 +173,7 @@ variable "talos" {
       inline_manifests = optional(list(object({
         name = string
         file = string
+        variables = optional(any, null)
       })), [])
       vip = optional(object({
         ip           = optional(string)
