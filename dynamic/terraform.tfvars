@@ -1,8 +1,8 @@
 cluster_name        = "talos-lab"
 environment         = "lab"
 ha_enabled          = false
-control_plane_count = 1
-worker_count        = 2
+control_plane_count = 3
+worker_count        = 3
 
 proxmox = {
   endpoint     = "https://192.168.88.64:8006"
@@ -58,6 +58,8 @@ talos = {
     "siderolabs/iscsi-tools",
     "siderolabs/util-linux-tools",
   ]
+  vip           = "192.168.88.200"
+  vip_interface = "ens18"
   machine = {
     kubelet = {
       extraArgs = {

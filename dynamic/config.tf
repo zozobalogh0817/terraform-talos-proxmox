@@ -169,5 +169,8 @@ variable "talos" {
     })), [])
     extensions       = optional(list(string), [])
     machine          = optional(any, {})
+    vip              = optional(string)
+    vip_interface    = optional(string, "ens18")
+    dhcp             = optional(bool, true)
   })
 }
