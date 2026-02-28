@@ -1,25 +1,25 @@
 locals {
   # Build role-indexed node descriptors
   control_planes = [
-    for i in range(var.control_plane_count) : {
+    for i in range(var.cluster_topology.control_plane.replica_count) : {
       role = "cp"
       idx  = i + 1
-      name = format("%s-cp-%02d", var.cluster_name, i + 1)
+      name = format("%s-cp-%02d", var.cluster_identity.name, i + 1)
     }
   ]
 
   workers = [
-    for i in range(var.worker_count) : {
+    for i in range(var.cluster_topology.worker.replica_count) : {
       role = "wk"
       idx  = i + 1
-      name = format("%s-wk-%02d", var.cluster_name, i + 1)
+      name = format("%s-wk-%02d", var.cluster_identity.name, i + 1)
     }
   ]
 
   nodes_all = concat(local.control_planes, local.workers)
 
   # --- Placement helpers ---
-  pve_nodes       = var.proxmox.target_nodes
+  pve_nodes       = var.proxmox_platform.placement_targets.hostnames
   pve_nodes_count = length(local.pve_nodes)
 
   # 1. Placement for Control Planes (stays simple spread/pin)
@@ -29,7 +29,7 @@ locals {
   }
 
   pinned_target_node_for = merge([
-    for pve, names in try(var.placement.pinned, {}) : {
+    for pve, names in try(var.infrastructure_policy.host_affinity, {}) : {
       for vm_name in names : vm_name => pve
     }
   ]...)
@@ -37,7 +37,7 @@ locals {
   effective_target_node_for_cp = {
     for n in local.control_planes :
     n.name => (
-      var.placement.strategy == "pin" && contains(keys(local.pinned_target_node_for), n.name)
+      var.infrastructure_policy.node_distribution_strategy == "pin" && contains(keys(local.pinned_target_node_for), n.name)
       ? local.pinned_target_node_for[n.name]
       : local.target_node_for_cp[n.name]
     )
@@ -47,7 +47,7 @@ locals {
   requested_vcpu_on_node_cp = {
     for pve in local.pve_nodes :
     pve => sum(concat([0], [
-      for n in local.control_planes : var.sizing.control_plane.vcpu
+      for n in local.control_planes : var.node_profiles.control_plane.vcpu
       if local.effective_target_node_for_cp[n.name] == pve
     ]))
   }
@@ -55,7 +55,7 @@ locals {
   requested_memory_on_node_cp = {
     for pve in local.pve_nodes :
     pve => sum(concat([0], [
-      for n in local.control_planes : var.sizing.control_plane.memory
+      for n in local.control_planes : var.node_profiles.control_plane.memory
       if local.effective_target_node_for_cp[n.name] == pve
     ]))
   }
@@ -63,8 +63,8 @@ locals {
   worker_slots_on_node = {
     for pve in local.pve_nodes :
     pve => floor(min(
-      (var.pve_capacity[pve].vcpu - local.requested_vcpu_on_node_cp[pve]) / var.sizing.worker.vcpu,
-      (var.pve_capacity[pve].memory - local.requested_memory_on_node_cp[pve]) / var.sizing.worker.memory
+      (var.capacity_budget[pve].vcpu - local.requested_vcpu_on_node_cp[pve]) / var.node_profiles.worker.vcpu,
+      (var.capacity_budget[pve].memory - local.requested_memory_on_node_cp[pve]) / var.node_profiles.worker.memory
     ))
   }
 
@@ -97,7 +97,7 @@ locals {
   effective_target_node_for_wk = {
     for n in local.workers :
     n.name => (
-      var.placement.strategy == "pin" && contains(keys(local.pinned_target_node_for), n.name)
+      var.infrastructure_policy.node_distribution_strategy == "pin" && contains(keys(local.pinned_target_node_for), n.name)
       ? local.pinned_target_node_for[n.name]
       : local.target_node_for_wk[n.name]
     )
@@ -114,12 +114,12 @@ locals {
 
   # Quick lookup sizing by role
   sizing_by_role = {
-    cp = var.sizing.control_plane
-    wk = var.sizing.worker
+    cp = var.node_profiles.control_plane
+    wk = var.node_profiles.worker
   }
 
   # Proxmox VLAN id: provider expects int; omit vlan tag if not set
-  vlan_id = try(var.proxmox.vlan_id, null)
+  vlan_id = try(var.proxmox_platform.network.vlan_id, null)
 
   #############################################################################
   # ENTERPRISE CAPACITY VALIDATION LOCALS (ADDED)
@@ -127,34 +127,34 @@ locals {
 
   # Ensure pve_capacity includes every target node
   missing_capacity_nodes = [
-    for n in local.pve_nodes : n if !contains(keys(var.pve_capacity), n)
+    for n in local.pve_nodes : n if !contains(keys(var.capacity_budget), n)
   ]
 
   # Total requested resources (vCPU, RAM MB)
   requested_total_vcpu = (
-    var.control_plane_count * var.sizing.control_plane.vcpu +
-    var.worker_count * var.sizing.worker.vcpu
+    var.cluster_topology.control_plane.replica_count * var.node_profiles.control_plane.vcpu +
+    var.cluster_topology.worker.replica_count * var.node_profiles.worker.vcpu
   )
 
   requested_total_memory = (
-    var.control_plane_count * var.sizing.control_plane.memory +
-    var.worker_count * var.sizing.worker.memory
+    var.cluster_topology.control_plane.replica_count * var.node_profiles.control_plane.memory +
+    var.cluster_topology.worker.replica_count * var.node_profiles.worker.memory
   )
 
   # Total allocatable capacity (for nodes in pool)
   capacity_total_vcpu = sum(concat([0], [
-    for n in local.pve_nodes : var.pve_capacity[n].vcpu
+    for n in local.pve_nodes : var.capacity_budget[n].vcpu
   ]))
 
   capacity_total_memory = sum(concat([0], [
-    for n in local.pve_nodes : var.pve_capacity[n].memory
+    for n in local.pve_nodes : var.capacity_budget[n].memory
   ]))
 
   # Per-node requested resources based on planned placement (effective_target_node_for)
   requested_vcpu_on_node = {
     for pve in local.pve_nodes :
     pve => sum(concat([0], [
-      for n in local.nodes_all : (n.role == "cp" ? var.sizing.control_plane.vcpu : var.sizing.worker.vcpu)
+      for n in local.nodes_all : (n.role == "cp" ? var.node_profiles.control_plane.vcpu : var.node_profiles.worker.vcpu)
       if local.effective_target_node_for[n.name] == pve
     ]))
   }
@@ -162,25 +162,25 @@ locals {
   requested_memory_on_node = {
     for pve in local.pve_nodes :
     pve => sum(concat([0], [
-      for n in local.nodes_all : (n.role == "cp" ? var.sizing.control_plane.memory : var.sizing.worker.memory)
+      for n in local.nodes_all : (n.role == "cp" ? var.node_profiles.control_plane.memory : var.node_profiles.worker.memory)
       if local.effective_target_node_for[n.name] == pve
     ]))
   }
 
   remaining_vcpu_on_node = {
     for pve in local.pve_nodes :
-    pve => var.pve_capacity[pve].vcpu - local.requested_vcpu_on_node[pve]
+    pve => var.capacity_budget[pve].vcpu - local.requested_vcpu_on_node[pve]
   }
 
   remaining_memory_on_node = {
     for pve in local.pve_nodes :
-    pve => var.pve_capacity[pve].memory - local.requested_memory_on_node[pve]
+    pve => var.capacity_budget[pve].memory - local.requested_memory_on_node[pve]
   }
 }
 
 resource "terraform_data" "capacity_assertions" {
   input = {
-    cluster_name           = var.cluster_name
+    cluster_name           = var.cluster_identity.name
     requested_total_vcpu   = local.requested_total_vcpu
     requested_total_memory = local.requested_total_memory
     capacity_total_vcpu    = local.capacity_total_vcpu
@@ -204,14 +204,14 @@ resource "terraform_data" "capacity_assertions" {
     }
 
     precondition {
-      condition     = length(local.interleaved_worker_slots) >= var.worker_count
-      error_message = "Not enough total capacity across all nodes to fit ${var.worker_count} workers after placing control planes. Only ${length(local.interleaved_worker_slots)} worker slots available."
+      condition     = length(local.interleaved_worker_slots) >= var.cluster_topology.worker.replica_count
+      error_message = "Not enough total capacity across all nodes to fit ${var.cluster_topology.worker.replica_count} workers after placing control planes. Only ${length(local.interleaved_worker_slots)} worker slots available."
     }
 
     precondition {
       condition = alltrue([
         for n in local.pve_nodes :
-        local.requested_vcpu_on_node[n] <= var.pve_capacity[n].vcpu
+        local.requested_vcpu_on_node[n] <= var.capacity_budget[n].vcpu
       ])
       error_message = "Insufficient vCPU on at least one Proxmox node for the planned placement. Adjust pve_capacity / placement / sizing."
     }
@@ -219,7 +219,7 @@ resource "terraform_data" "capacity_assertions" {
     precondition {
       condition = alltrue([
         for n in local.pve_nodes :
-        local.requested_memory_on_node[n] <= var.pve_capacity[n].memory
+        local.requested_memory_on_node[n] <= var.capacity_budget[n].memory
       ])
       error_message = "Insufficient RAM on at least one Proxmox node for the planned placement. Adjust pve_capacity / placement / sizing."
     }
@@ -235,10 +235,10 @@ resource "proxmox_vm_qemu" "control_plane" {
   for_each = { for n in local.control_planes : n.name => n }
 
   target_node = local.effective_target_node_for[each.key]
-  description = "Talos Control Plane (${var.cluster_name})"
+  description = "Talos Control Plane (${var.cluster_identity.name})"
   vmid        = local.vmid_base.cp + (each.value.idx - 1)
   name        = each.key
-  tags = "control-plane,${var.cluster_name}"
+  tags = "control-plane,${var.cluster_identity.name}"
 
   memory  = local.sizing_by_role.cp.memory
   balloon = 0
@@ -252,7 +252,7 @@ resource "proxmox_vm_qemu" "control_plane" {
   disk {
     slot     = "scsi0"
     type     = "disk"
-    storage  = var.proxmox.datastore_id
+    storage  = var.proxmox_platform.storage.datastore_id
     size     = "${local.sizing_by_role.cp.disk}G"
     iothread = true
     format   = "raw"
@@ -267,7 +267,7 @@ resource "proxmox_vm_qemu" "control_plane" {
 
   network {
     id     = 0
-    bridge = var.proxmox.bridge
+    bridge = var.proxmox_platform.network.bridge
     model  = "virtio"
 
     # only set if provided
@@ -285,7 +285,7 @@ resource "proxmox_vm_qemu" "control_plane" {
 
   efidisk {
     efitype           = "4m"
-    storage           = var.proxmox.datastore_id
+    storage           = var.proxmox_platform.storage.datastore_id
     pre_enrolled_keys = false
   }
 
@@ -308,10 +308,10 @@ resource "proxmox_vm_qemu" "worker" {
   for_each = { for n in local.workers : n.name => n }
 
   target_node = local.effective_target_node_for[each.key]
-  description = "Talos Worker (${var.cluster_name})"
+  description = "Talos Worker (${var.cluster_identity.name})"
   vmid        = local.vmid_base.wk + (each.value.idx - 1)
   name        = each.key
-  tags = "worker,${var.cluster_name}"
+  tags = "worker,${var.cluster_identity.name}"
 
   memory  = local.sizing_by_role.wk.memory
   balloon = 0
@@ -325,7 +325,7 @@ resource "proxmox_vm_qemu" "worker" {
   disk {
     slot     = "scsi0"
     type     = "disk"
-    storage  = var.proxmox.datastore_id
+    storage  = var.proxmox_platform.storage.datastore_id
     size     = "${local.sizing_by_role.wk.disk}G"
     iothread = true
     format   = "raw"
@@ -340,7 +340,7 @@ resource "proxmox_vm_qemu" "worker" {
 
   network {
     id     = 0
-    bridge = var.proxmox.bridge
+    bridge = var.proxmox_platform.network.bridge
     model  = "virtio"
     tag    = local.vlan_id
   }
@@ -355,7 +355,7 @@ resource "proxmox_vm_qemu" "worker" {
 
   efidisk {
     efitype           = "4m"
-    storage           = var.proxmox.datastore_id
+    storage           = var.proxmox_platform.storage.datastore_id
     pre_enrolled_keys = false
   }
 
@@ -407,8 +407,8 @@ output "capacity_remaining_by_node" {
     for n in local.pve_nodes : n => {
       requested_vcpu   = local.requested_vcpu_on_node[n]
       requested_memory = local.requested_memory_on_node[n]
-      capacity_vcpu    = var.pve_capacity[n].vcpu
-      capacity_memory  = var.pve_capacity[n].memory
+      capacity_vcpu    = var.capacity_budget[n].vcpu
+      capacity_memory  = var.capacity_budget[n].memory
       remaining_vcpu   = local.remaining_vcpu_on_node[n]
       remaining_memory = local.remaining_memory_on_node[n]
     }

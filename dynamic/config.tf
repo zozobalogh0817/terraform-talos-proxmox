@@ -2,108 +2,88 @@
 # Cluster intent (governance-level inputs)
 ###############################################################################
 
-variable "cluster_name" {
+variable "cluster_identity" {
   description = "Logical name of the cluster (used for VM names, Talos cluster name, tags)."
-  type        = string
+  type        = object({
+    name = string
+  })
 
   validation {
-    condition     = length(var.cluster_name) >= 3 && can(regex("^[a-z0-9-]+$", var.cluster_name))
-    error_message = "cluster_name must be at least 3 chars and contain only lowercase letters, numbers, and hyphens."
+    condition     = length(var.cluster_identity.name) >= 3 && can(regex("^[a-z0-9-]+$", var.cluster_identity.name))
+    error_message = "cluster_identity.name must be at least 3 chars and contain only lowercase letters, numbers, and hyphens."
   }
 }
 
-variable "environment" {
-  description = "Environment label used for policies (dev/prod/lab)."
-  type        = string
-  default     = "lab"
+variable "cluster_topology" {
+  description = "Cluster topology and control-plane availability policy."
+  type = object({
+    control_plane = object({
+      replica_count = number
+      availability = object({
+        mode = string # single | ha
+      })
+    })
 
-  validation {
-    condition     = contains(["dev", "lab", "prod"], var.environment)
-    error_message = "environment must be one of: dev, lab, prod."
+    worker = object({
+      replica_count = number
+    })
+  })
+
+  default = {
+    control_plane = { replica_count = 3, availability = { mode = "ha" } }
+    worker        = { replica_count = 2 }
   }
-}
-
-variable "ha_enabled" {
-  description = "If true, enforce HA control plane rules (odd and >= 3)."
-  type        = bool
-  default     = true
-}
-
-variable "control_plane_count" {
-  description = "Number of control-plane nodes (etcd members)."
-  type        = number
-  default     = 3
 
   validation {
     condition = (
-      (!var.ha_enabled && var.control_plane_count >= 1) ||
-      (var.ha_enabled && var.control_plane_count >= 3 && var.control_plane_count % 2 == 1)
+    (var.cluster_topology.control_plane.availability.mode == "single" &&
+    var.cluster_topology.control_plane.replica_count >= 1) ||
+    (var.cluster_topology.control_plane.availability.mode == "ha" &&
+    var.cluster_topology.control_plane.replica_count >= 3 &&
+    var.cluster_topology.control_plane.replica_count % 2 == 1)
     )
-    error_message = "When ha_enabled=true, control_plane_count must be an odd number >= 3 (3,5,7). When ha_enabled=false, it must be >= 1."
+    error_message = "control_plane.availability.mode=ha requires an odd replica_count >= 3 (3,5,7). mode=single requires replica_count >= 1."
   }
 
   validation {
-    condition     = var.control_plane_count <= 7
-    error_message = "control_plane_count > 7 is discouraged due to etcd performance."
+    condition     = var.cluster_topology.control_plane.replica_count <= 7
+    error_message = "control_plane.replica_count > 7 is discouraged due to etcd performance."
   }
-}
-variable "worker_count" {
-  description = "Number of worker nodes."
-  type        = number
-  default     = 2
 
   validation {
-    condition     = var.worker_count >= 0
-    error_message = "worker_count must be >= 0."
+    condition     = var.cluster_topology.worker.replica_count >= 0
+    error_message = "worker.replica_count must be >= 0."
   }
 }
-
 
 ###############################################################################
 # Proxmox placement (you decide where Terraform may place VMs)
 ###############################################################################
 
-variable "proxmox" {
-  description = "Proxmox API + placement targets."
+variable "proxmox_platform" {
+  description = "Proxmox platform contract: placement targets, storage, and network configuration."
   type = object({
-    endpoint = string
-    insecure = optional(bool, false)
+    placement_targets = object({
+      hostnames = list(string) # allowed Proxmox nodes (physical hosts)
+    })
 
-    # Allowed Proxmox nodes (physical hosts) that Terraform may place VMs onto.
-    target_nodes = list(string)
+    storage = object({
+      datastore_id = string
+    })
 
-    # Where VMs live
-    datastore_id = string
-
-    # Network plumbing
-    bridge  = string           # e.g. 'vmbr0'
-    vlan_id = optional(number) # null means untagged
+    network = object({
+      bridge  = string           # e.g. vmbr0
+      vlan_id = optional(number) # null means untagged
+    })
   })
 
   validation {
-    condition     = length(var.proxmox.target_nodes) >= 1
-    error_message = "proxmox.target_nodes must contain at least one Proxmox node."
+    condition     = length(var.proxmox_platform.placement_targets.hostnames) >= 1
+    error_message = "proxmox_platform.placement_targets.hostnames must contain at least one Proxmox node."
   }
 }
 
-variable "placement" {
-  description = "Scheduling policy for VM distribution across Proxmox nodes."
-  type = object({
-    strategy = string # round_robin | spread | pin
-    # Used when strategy == pin: explicit mapping of node name -> list of vm names (optional advanced)
-    pinned = optional(map(list(string)), {})
-  })
-  default = {
-    strategy = "spread"
-  }
-
-  validation {
-    condition     = contains(["round_robin", "spread", "pin"], var.placement.strategy)
-    error_message = "placement.strategy must be one of: round_robin, spread, pin."
-  }
-}
-
-variable "pve_capacity" {
+variable "capacity_budget" {
   description = "Per-node allocatable capacity budget for THIS cluster (vCPU + RAM MB). Authoritative for validation."
   type = map(object({
     vcpu   = number
@@ -111,15 +91,38 @@ variable "pve_capacity" {
   }))
 
   validation {
-    condition     = length(var.pve_capacity) > 0
+    condition     = length(var.capacity_budget) > 0
     error_message = "pve_capacity must not be empty."
   }
 }
+
+variable "infrastructure_policy" {
+  description = "Governance policy defining infrastructure distribution and node affinity behavior across Proxmox hosts."
+  type = object({
+    node_distribution_strategy = string # round_robin | spread | pin
+
+    # Only used when node_distribution_strategy == "pin"
+    host_affinity = optional(map(list(string)), {})
+  })
+
+  default = {
+    node_distribution_strategy = "spread"
+  }
+
+  validation {
+    condition = contains(
+      ["round_robin", "spread", "pin"],
+      var.infrastructure_policy.node_distribution_strategy
+    )
+    error_message = "infrastructure_policy.node_distribution_strategy must be one of: round_robin, spread, pin."
+  }
+}
+
 ###############################################################################
 # Node sizing (policy-level: you define the VM shape for each role)
 ###############################################################################
 
-variable "sizing" {
+variable "node_profiles" {
   description = "Resource sizing for Talos nodes."
   type = object({
     control_plane = object({
@@ -141,12 +144,12 @@ variable "sizing" {
   }
 
   validation {
-    condition     = var.sizing.control_plane.vcpu >= 2 && var.sizing.control_plane.memory >= 2048 && var.sizing.control_plane.disk >= 20
+    condition     = var.node_profiles.control_plane.vcpu >= 2 && var.node_profiles.control_plane.memory >= 2048 && var.node_profiles.control_plane.disk >= 20
     error_message = "Control planes must be at least 2 vCPU, 2048MB RAM, 20GB disk (baseline)."
   }
 
   validation {
-    condition     = var.sizing.worker.vcpu >= 1 && var.sizing.worker.memory >= 1024 && var.sizing.worker.disk >= 20
+    condition     = var.node_profiles.worker.vcpu >= 1 && var.node_profiles.worker.memory >= 1024 && var.node_profiles.worker.disk >= 20
     error_message = "Workers must be at least 1 vCPU, 1024MB RAM, 20GB disk (baseline)."
   }
 }
@@ -158,19 +161,25 @@ variable "sizing" {
 variable "talos" {
   description = "Talos configuration inputs."
   type = object({
-    # Image / boot method
-    version         = optional(string, "v1.9.4")
-    arch            = optional(string, "amd64")
-    platform        = optional(string, "metal")
-    extra_manifests  = optional(list(string), [])
-    inline_manifests = optional(list(object({
-      name = string
-      file = string
-    })), [])
-    extensions       = optional(list(string), [])
-    machine          = optional(any, {})
-    vip              = optional(string)
-    vip_interface    = optional(string, "ens18")
-    dhcp             = optional(bool, true)
+    image_factory = object({
+      version    = optional(string, "v1.9.4")
+      arch       = optional(string, "amd64")
+      platform   = optional(string, "metal")
+      storage    = optional(string, "local")
+      extensions = optional(list(string), [])
+    })
+    control_plane_machine_config = object({
+      extra_manifests = optional(list(string), [])
+      inline_manifests = optional(list(object({
+        name = string
+        file = string
+      })), [])
+      vip = optional(object({
+        ip           = optional(string)
+        interface    = optional(string, "ens18")
+        dhcp_enabled = optional(bool, true)
+      }))
+    })
+    extra_machine_configuration = optional(any, {})
   })
 }
