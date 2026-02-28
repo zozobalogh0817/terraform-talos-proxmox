@@ -1,8 +1,8 @@
 locals {
-  is_vip_enabled    = try(var.talos.vip, null) != null
-  cluster_endpoint  = local.is_vip_enabled ? var.talos.vip.ip : proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address
+  is_vip_enabled    = try(var.talos.control_plane_machine_config.vip, null) != null
+  cluster_endpoint  = local.is_vip_enabled ? var.talos.control_plane_machine_config.vip.ip : proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address
   control_plane_ips = [for cp in local.control_planes : proxmox_vm_qemu.control_plane[cp.name].default_ipv4_address]
-  endpoints         = local.is_vip_enabled ? concat([var.talos.vip.ip], local.control_plane_ips) : local.control_plane_ips
+  endpoints         = local.is_vip_enabled ? concat([var.talos.control_plane_machine_config.vip.ip], local.control_plane_ips) : local.control_plane_ips
   machine_configuration = yamlencode({
     machine = merge(
       {
@@ -18,7 +18,7 @@ locals {
       inlineManifests = [
         for m in var.talos.control_plane_machine_config.inline_manifests : {
           name     = m.name
-          contents = file("${path.module}/${m.file}")
+          contents = m.variables != null ? templatefile("${path.module}/${m.file}", m.variables) : file("${path.module}/${m.file}")
         }
       ]
       extraManifests = var.talos.control_plane_machine_config.extra_manifests
@@ -29,10 +29,10 @@ locals {
       network = {
         interfaces = [
           {
-            interface = var.talos.vip.interface
-            dhcp      = var.talos.vip.dhcp_enabled
+            interface = var.talos.control_plane_machine_config.vip.interface
+            dhcp      = var.talos.control_plane_machine_config.vip.dhcp_enabled
             vip = {
-              ip = var.talos.vip.ip
+              ip = var.talos.control_plane_machine_config.vip.ip
             }
           }
         ]
