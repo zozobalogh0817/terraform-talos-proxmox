@@ -1,12 +1,9 @@
 cluster_name        = "talos-lab"
-environment         = "lab"
 ha_enabled          = false
 control_plane_count = 1
 worker_count        = 2
 
 proxmox = {
-  endpoint     = "https://192.168.88.64:8006"
-  insecure     = true
   target_nodes = ["pve1", "pve2", "pve3"]
   datastore_id = "local-lvm"
   bridge       = "vmbr0"
@@ -73,4 +70,26 @@ talos = {
       ]
     }
   }
+}
+
+load_balancer = {
+  enabled  = true
+  strategy = "haproxy" # Dedicated Load Balancer (VM-based)
+  vip      = "192.168.88.200"
+  nodes = {
+    load-balancer-1 = { target_node = "pve1", ip = "192.168.88.201", id = 801 }
+    load-balancer-2 = { target_node = "pve2", ip = "192.168.88.202", id = 802 }
+  }
+  template = "alpine-lb-template"
+  template_ids = {
+    pve1 = "alpine-lb-template"
+    pve2 = "alpine-lb-template"
+    pve3 = "alpine-lb-template"
+  }
+  cores                = 1
+  memory               = 512
+  disk                 = 2
+  gateway              = "192.168.88.1"
+  ssh_public_key       = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGq+eb7lneZK43dqBErMIAUHOmDRiSWMNgNQoOBdqJcW"
+  ssh_private_key_path = "./id_ed25519"
 }

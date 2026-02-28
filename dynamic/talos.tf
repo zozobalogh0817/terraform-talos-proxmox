@@ -6,10 +6,10 @@ data "talos_machine_configuration" "control_plane" {
   ]
 
   cluster_name     = var.cluster_name
-  cluster_endpoint = "https://${proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address}:6443"
+  cluster_endpoint = "https://${local.authoritative_endpoint}:6443"
   machine_type     = "controlplane"
   machine_secrets  = talos_machine_secrets.this.machine_secrets
-  config_patches = [
+  config_patches = compact([
     yamlencode({
       cluster = {
         inlineManifests = [
@@ -19,6 +19,9 @@ data "talos_machine_configuration" "control_plane" {
           }
         ]
         extraManifests = var.talos.extra_manifests
+        apiServer = {
+          certSANs = compact([local.authoritative_endpoint])
+        }
       }
     }),
     yamlencode({
@@ -27,11 +30,28 @@ data "talos_machine_configuration" "control_plane" {
           install = {
             image = data.talos_image_factory_urls.this.urls.installer
           }
+          certSANs = compact([local.authoritative_endpoint])
         },
         var.talos.machine
       )
-    })
-  ]
+    }),
+    # Talos Native VIP configuration
+    var.load_balancer.enabled && var.load_balancer.strategy == "talos_native" ? yamlencode({
+      machine = {
+        network = {
+          interfaces = [
+            {
+              interface = var.load_balancer.interface
+              vip = {
+                ip   = var.load_balancer.vip
+                vrid = var.load_balancer.vrid
+              }
+            }
+          ]
+        }
+      }
+    }) : null
+  ])
 }
 
 data "talos_machine_configuration" "worker" {
@@ -40,7 +60,7 @@ data "talos_machine_configuration" "worker" {
   ]
 
   cluster_name     = var.cluster_name
-  cluster_endpoint = "https://${proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address}:6443"
+  cluster_endpoint = "https://${local.authoritative_endpoint}:6443"
   machine_type     = "worker"
   machine_secrets  = talos_machine_secrets.this.machine_secrets
   config_patches = [
@@ -50,6 +70,7 @@ data "talos_machine_configuration" "worker" {
           install = {
             image = data.talos_image_factory_urls.this.urls.installer
           }
+          certSANs = compact([local.authoritative_endpoint])
         },
         var.talos.machine
       )
@@ -64,8 +85,8 @@ data "talos_client_configuration" "this" {
 
   cluster_name         = var.cluster_name
   client_configuration = talos_machine_secrets.this.client_configuration
-  nodes                = [proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address]
-  endpoints            = [for cp in local.control_planes : proxmox_vm_qemu.control_plane[cp.name].default_ipv4_address]
+  nodes                = [local.authoritative_endpoint]
+  endpoints            = local.authoritative_talos_endpoints
 }
 
 resource "local_file" "secrets_yaml" {
@@ -114,8 +135,8 @@ resource "talos_machine_configuration_apply" "worker" {
 
 resource "talos_machine_bootstrap" "this" {
   client_configuration = talos_machine_secrets.this.client_configuration
-  node                 = proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address
-  endpoint             = proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address
+  node                 = local.authoritative_endpoint
+  endpoint             = local.authoritative_endpoint
 
   depends_on = [
     talos_machine_configuration_apply.control_plane,
@@ -125,8 +146,8 @@ resource "talos_machine_bootstrap" "this" {
 
 resource "talos_cluster_kubeconfig" "this" {
   client_configuration = talos_machine_secrets.this.client_configuration
-  node                 = proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address
-  endpoint             = proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address
+  node                 = local.authoritative_endpoint
+  endpoint             = local.authoritative_endpoint
 
   depends_on = [
     talos_machine_bootstrap.this

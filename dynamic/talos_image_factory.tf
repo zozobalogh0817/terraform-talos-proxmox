@@ -5,6 +5,9 @@ locals {
 }
 
 resource "talos_image_factory_schematic" "this" {
+  depends_on = [
+    proxmox_vm_qemu.load_balancer
+  ]
   schematic = yamlencode({
     customization = {
       systemExtensions = {

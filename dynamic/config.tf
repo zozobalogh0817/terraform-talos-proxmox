@@ -12,17 +12,6 @@ variable "cluster_name" {
   }
 }
 
-variable "environment" {
-  description = "Environment label used for policies (dev/prod/lab)."
-  type        = string
-  default     = "lab"
-
-  validation {
-    condition     = contains(["dev", "lab", "prod"], var.environment)
-    error_message = "environment must be one of: dev, lab, prod."
-  }
-}
-
 variable "ha_enabled" {
   description = "If true, enforce HA control plane rules (odd and >= 3)."
   type        = bool
@@ -66,9 +55,6 @@ variable "worker_count" {
 variable "proxmox" {
   description = "Proxmox API + placement targets."
   type = object({
-    endpoint = string
-    insecure = optional(bool, false)
-
     # Allowed Proxmox nodes (physical hosts) that Terraform may place VMs onto.
     target_nodes = list(string)
 
@@ -148,6 +134,64 @@ variable "sizing" {
   validation {
     condition     = var.sizing.worker.vcpu >= 1 && var.sizing.worker.memory >= 1024 && var.sizing.worker.disk >= 20
     error_message = "Workers must be at least 1 vCPU, 1024MB RAM, 20GB disk (baseline)."
+  }
+}
+
+###############################################################################
+# Load Balancer Configuration
+###############################################################################
+
+variable "load_balancer" {
+  description = "Configuration for high-availability load balancer / VIP"
+  type = object({
+    enabled  = optional(bool, false)
+    strategy = optional(string, "haproxy") # talos_native | haproxy | external
+    vip      = optional(string, "")
+
+    # --- Talos Native VIP specific ---
+    interface = optional(string, "eth0")
+    vrid      = optional(number, 51)
+
+    # --- Dedicated Load Balancer specific (VM from Packer Template) ---
+    nodes = optional(map(object({
+      target_node = string
+      ip          = string
+      id          = number
+    })), {})
+    template             = optional(string, "alpine-lb-template")
+    template_ids         = optional(map(string), {})
+    cores                = optional(number, 1)
+    memory               = optional(number, 512)
+    disk                 = optional(number, 2)
+    gateway              = optional(string, "192.168.88.1")
+    ssh_public_key       = optional(string, "")
+    ssh_private_key_path = optional(string, "~/.ssh/id_rsa")
+  })
+  default = {
+    enabled  = false
+    strategy = "haproxy"
+    vip      = ""
+    nodes = {
+      load-balancer-1 = { target_node = "pve1", ip = "192.168.88.201", id = 801 }
+      load-balancer-2 = { target_node = "pve2", ip = "192.168.88.202", id = 802 }
+    }
+    template             = "alpine-lb-template"
+    template_ids = {
+      pve1 = "900"
+      pve2 = "901"
+      pve3 = "902"
+    }
+    cores                = 1
+    memory               = 512
+    disk                 = 2
+    gateway              = "192.168.88.1"
+    ssh_public_key       = ""
+    ssh_private_key_path = "~/.ssh/id_rsa"
+  }
+
+  validation {
+    condition     = contains(["talos_native", "haproxy", "external"], var.load_balancer.strategy)
+    error_message = "load_balancer.strategy must be one of: talos_native, haproxy, external."
   }
 }
 

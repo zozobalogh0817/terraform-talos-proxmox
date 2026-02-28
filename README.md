@@ -281,6 +281,64 @@ While this solution provides a robust foundation, the following enhancements are
 ### Longhorn Support
 - `kubelet.extraMounts` preconfigures `/var/lib/longhorn` on all nodes to support Longhorn volume operations.
 
+## Load Balancing Architecture
+
+The cluster provides three strategies for ensuring high availability of the Kubernetes and Talos APIs. The load balancer is the authoritative endpoint for the cluster (`https://<vip>:6443`).
+
+### 1. Dedicated HAProxy (Strategy: `haproxy`)
+
+This is the recommended approach for production-grade on-premise deployments. Terraform provisions a dedicated set of lightweight Alpine Linux VMs that run HAProxy and Keepalived.
+
+- **High Availability**: Keepalived manages a Virtual IP (VIP) across multiple load balancer nodes.
+- **Protocol**: Operates in **TCP mode** to allow the Kubernetes API server to handle TLS termination and mutual TLS authentication (mTLS).
+- **Automation**: Backends are automatically updated whenever control plane nodes are added or removed.
+- **Ports**:
+    - `6443`: Kubernetes API
+    - `50000`: Talos API
+
+### 2. Talos Native VIP (Strategy: `talos_native`)
+
+A simpler approach where Talos nodes themselves manage a shared VIP using a built-in VRRP implementation. This eliminates the need for extra VMs but requires all control plane nodes to be on the same Layer 2 network segment.
+
+### 3. External Load Balancer (Strategy: `external`)
+
+If you are using a cloud provider's load balancer or a pre-existing hardware appliance (F5, NetScaler, etc.), use this strategy.
+
+- **Configuration**: You must manually configure your external load balancer to listen on TCP port `6443` and direct traffic to the control plane nodes.
+- **Note**: Ensure the load balancer is configured for **Layer 4 (TCP) balancing**. Do not use an HTTP/HTTPS (Layer 7) load balancer, as it will interfere with Kubernetes' mTLS.
+
+## Troubleshooting & Tips
+
+### SSH Host Key Mismatch
+When iterating on the cluster, you might encounter a "REMOTE HOST IDENTIFICATION HAS CHANGED" error when trying to SSH into the Load Balancer nodes. This happens because the VM has been recreated with a new SSH host key, but your local `known_hosts` file still contains the old one.
+
+**Manual Fix:**
+Run the following command to clear the offending entry (replace with your IP):
+```bash
+ssh-keygen -R 192.168.88.201
+```
+
+**Automated Solution:**
+The project includes an automated `ssh_key_cleanup` resource in Terraform that runs `ssh-keygen -R` for each managed node during the provisioning process.
+
+**Pro-Tip (Developer Experience):**
+To avoid this issue entirely for your lab network, add the following to your `~/.ssh/config` file:
+```ssh
+Host 192.168.88.*
+    StrictHostKeyChecking no
+    UserKnownHostsFile /dev/null
+    LogLevel ERROR
+```
+
+### Accessing the Load Balancer
+The Load Balancer VMs are based on Alpine Linux and are configured with an `alpine` user via Cloud-Init.
+
+```bash
+ssh alpine@<load-balancer-ip>
+```
+
+---
+
 ## Requirements
 - Terraform >= 1.14.5
 - Providers:
