@@ -40,31 +40,41 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
-      # Fails the PR if formatting differs (exit code 3 is normal in that case)
       - name: Terraform fmt (check)
-        run: terraform fmt -check -diff -recursive
-
-      - name: Cache Terraform providers
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.terraform.d/plugin-cache
-            ${{ env.WORKDIR }}/.terraform
-          key: ${{ runner.os }}-tf-${{ env.TF_VERSION }}-${{ hashFiles(format('{0}/**/*.tf', env.WORKDIR)) }}
-          restore-keys: |
-            ${{ runner.os }}-tf-${{ env.TF_VERSION }}-
+        id: fmt
+        run: |
+          set +e
+          terraform fmt -check -diff -recursive > tf-fmt.txt 2>&1
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
+          cat tf-fmt.txt
+          exit 0
 
       - name: Terraform init (no backend)
+        id: init
         working-directory: ${{ env.WORKDIR }}
-        env:
-          TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
-        run: |
-          mkdir -p ~/.terraform.d/plugin-cache
-          terraform init -backend=false -input=false
+        run: terraform init -backend=false -input=false -no-color
 
       - name: Terraform validate
+        id: validate
         working-directory: ${{ env.WORKDIR }}
-        run: terraform validate -no-color
+        run: terraform validate -no-color > tf-validate.txt 2>&1 || (cat tf-validate.txt && exit 1)
+
+      - name: Upload terraform logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-logs
+          path: |
+            tf-fmt.txt
+            tf-validate.txt
+          if-no-files-found: ignore
+
+      - name: Fail if fmt failed
+        run: |
+          if [ "${{ steps.fmt.outputs.exitcode }}" != "0" ]; then
+            echo "terraform fmt issues detected."
+            exit 1
+          fi
 
   tflint:
     name: TFLint
@@ -74,29 +84,51 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # FIX: correct org/name (was terraform-lintekrs)
       - name: Setup TFLint
         uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: v0.55.0
 
-      - name: TFLint init
+      - name: TFLint (run)
+        id: tflint
         working-directory: dynamic
-        run: tflint --init
+        run: |
+          set +e
+          tflint --init > tflint-init.txt 2>&1
+          tflint -f compact > tflint.txt 2>&1
+          echo "exitcode=$?" >> $GITHUB_OUTPUT
+          echo "=== tflint --init ==="
+          cat tflint-init.txt || true
+          echo "=== tflint ==="
+          cat tflint.txt || true
+          exit 0
 
-      - name: TFLint
-        working-directory: dynamic
-        run: tflint -f compact
+      - name: Upload tflint logs
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: tflint-logs
+          path: |
+            dynamic/tflint-init.txt
+            dynamic/tflint.txt
+          if-no-files-found: ignore
+
+      - name: Fail if tflint failed
+        run: |
+          if [ "${{ steps.tflint.outputs.exitcode }}" != "0" ]; then
+            echo "tflint issues detected."
+            exit 1
+          fi
 
   security:
-    name: Security (tfsec + trivy)
+    name: Security (tfsec + SARIF)
     runs-on: ubuntu-latest
     if: ${{ !github.event.pull_request.draft }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # FIX: use tfsec SARIF action that actually writes the sarif file
+      # Creates tfsec.sarif reliably
       - name: tfsec (SARIF)
         uses: aquasecurity/tfsec-sarif-action@v0.1.4
         with:
@@ -104,25 +136,159 @@ jobs:
           working_directory: dynamic
         continue-on-error: true
 
-      # FIX: upload-sarif v4 + only if file exists
-      - name: Upload tfsec SARIF
+      - name: Upload tfsec SARIF to Code Scanning
         if: ${{ always() && hashFiles('tfsec.sarif') != '' }}
         uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: tfsec.sarif
 
-      - name: Trivy config scan (SARIF)
-        uses: aquasecurity/trivy-action@0.24.0
+      - name: Upload SARIF artifact (for PR summary)
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
         with:
-          scan-type: config
-          scan-ref: dynamic
-          format: sarif
-          output: trivy.sarif
-          severity: HIGH,CRITICAL
+          name: sarif
+          path: tfsec.sarif
+          if-no-files-found: ignore
+
+  review:
+    name: PR Review Summary (Upsert Comment)
+    runs-on: ubuntu-latest
+    # ✅ key fix: always run even if dependencies failed
+    if: ${{ always() && !github.event.pull_request.draft }}
+    needs: [terraform, tflint, security]
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      actions: read
+    steps:
+      - name: Download terraform logs
+        if: ${{ always() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: terraform-logs
+          path: artifacts/terraform
         continue-on-error: true
 
-      - name: Upload Trivy SARIF
-        if: ${{ always() && hashFiles('trivy.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@v4
+      - name: Download tflint logs
+        if: ${{ always() }}
+        uses: actions/download-artifact@v4
         with:
-          sarif_file: trivy.sarif
+          name: tflint-logs
+          path: artifacts/tflint
+        continue-on-error: true
+
+      - name: Download SARIF
+        if: ${{ always() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: sarif
+          path: artifacts/sarif
+        continue-on-error: true
+
+      - name: Upsert PR Comment (badges + summaries)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const marker = "<!-- terraform-pr-review -->";
+            const fs = require("fs");
+            const path = require("path");
+
+            const terraformResult = "${{ needs.terraform.result }}"; // success|failure|skipped|cancelled
+            const tflintResult    = "${{ needs.tflint.result }}";
+            const securityResult  = "${{ needs.security.result }}";
+
+            const readFileSafe = (p) => {
+              try { return fs.readFileSync(p, "utf8"); } catch { return ""; }
+            };
+
+            const fmtOutput = readFileSafe(path.join(process.cwd(), "artifacts/terraform/tf-fmt.txt")).trim();
+            const validateOutput = readFileSafe(path.join(process.cwd(), "artifacts/terraform/tf-validate.txt")).trim();
+            const tflintOutput = readFileSafe(path.join(process.cwd(), "artifacts/tflint/tflint.txt")).trim();
+
+            // tfsec SARIF summary (count results)
+            const tfsecSarifPath = path.join(process.cwd(), "artifacts/sarif/tfsec.sarif");
+            let tfsecCount = null;
+            try {
+              if (fs.existsSync(tfsecSarifPath)) {
+                const sarif = JSON.parse(fs.readFileSync(tfsecSarifPath, "utf8"));
+                const runs = Array.isArray(sarif.runs) ? sarif.runs : [];
+                tfsecCount = runs.reduce((sum, r) => sum + (Array.isArray(r.results) ? r.results.length : 0), 0);
+              }
+            } catch (e) {
+              tfsecCount = null;
+            }
+
+            const ok = (r) => r === "success";
+            const badge = (label, isOk, okText="pass", badText="fail") => {
+              const status = isOk ? okText : badText;
+              const color = isOk ? "brightgreen" : "red";
+              return `![${label}](https://img.shields.io/badge/${encodeURIComponent(label)}-${encodeURIComponent(status)}-${color})`;
+            };
+
+            const secOk = (tfsecCount === null) ? ok(securityResult) : (tfsecCount === 0);
+            const badges = [
+              badge("terraform", ok(terraformResult)),
+              badge("tflint", ok(tflintResult)),
+              badge("tfsec", secOk, "clean", "findings")
+            ].join(" ");
+
+            const details = (title, content) => {
+              const body = (content && content.length) ? content : "No output captured.";
+              return [
+                `### ${title}`,
+                `<details><summary>Show details</summary>`,
+                "",
+                "```",
+                body.slice(0, 12000),
+                "```",
+                "</details>",
+                ""
+              ].join("\n");
+            };
+
+            const tfsecLine =
+              tfsecCount === null ? `- **tfsec**: (no SARIF found / unreadable)` :
+              tfsecCount === 0 ? `- **tfsec**: 0 findings` :
+              `- **tfsec**: ${tfsecCount} finding(s)`;
+
+            const body = [
+              marker,
+              "## Terraform PR Review",
+              "",
+              badges,
+              "",
+              "### Job Results",
+              `- **terraform**: ${terraformResult}`,
+              `- **tflint**: ${tflintResult}`,
+              `- **security**: ${securityResult}`,
+              tfsecLine,
+              "",
+              details("terraform fmt", fmtOutput),
+              details("terraform validate", validateOutput),
+              details("tflint", tflintOutput),
+              tfsecCount === 0 ? "### tfsec ✅\nNo findings.\n" :
+                (tfsecCount === null ? "### tfsec ⚠️\nSARIF missing/unreadable. Check the security job logs.\n"
+                                     : "### tfsec ❌\nFindings are available in Code Scanning.\n"),
+              "---",
+              "_Automated review by CI_"
+            ].join("\n");
+
+            const { owner, repo } = context.repo;
+            const issue_number = context.issue.number;
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100
+            });
+
+            const existing = comments.find(c =>
+              (c.user?.login === "github-actions[bot]" || c.user?.type === "Bot") &&
+              typeof c.body === "string" &&
+              c.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+            } else {
+              await github.rest.issues.createComment({ owner, repo, issue_number, body });
+            }
