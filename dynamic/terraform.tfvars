@@ -1,7 +1,7 @@
 cluster_name        = "talos-lab"
 environment         = "lab"
-ha_enabled          = true
-control_plane_count = 3
+ha_enabled          = false
+control_plane_count = 1
 worker_count        = 2
 
 proxmox = {
@@ -28,14 +28,49 @@ pve_capacity = {
 }
 
 talos = {
-  iso = "local:iso/talos-qemu-agent-metal-amd64.iso"
+  version  = "v1.12.4"
+  platform = "metal"
+  arch     = "amd64"
   extra_manifests = [
-    "https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml",
-    "https://github.com/cert-manager/cert-manager/releases/download/v1.19.3/cert-manager.yaml",
-    "https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.14.3/deploy/static/provider/cloud/deploy.yaml",
-    /*
-    "https://raw.githubusercontent.com/longhorn/longhorn/v1.11.0/deploy/longhorn.yaml",
-    "https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.8.1/components.yaml"
-     */
+    "https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/main/deploy/standalone-install.yaml",
+    "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml"
   ]
+  inline_manifests = [
+    {
+      name = "argocd-namespace"
+      file = "cluster-manifests/argocd-namespace.yaml"
+    },
+    {
+      name = "argocd-controller-crb"
+      file = "cluster-manifests/argocd-controller-crb.yaml"
+    },
+    {
+      name = "argocd-installer"
+      file = "cluster-manifests/argocd-installer.yaml"
+    },
+    {
+      name = "argocd-root-app"
+      file = "cluster-manifests/argocd-root-app.yaml"
+    }
+  ]
+  extensions = [
+    "siderolabs/qemu-guest-agent",
+    "siderolabs/iscsi-tools",
+    "siderolabs/util-linux-tools",
+  ]
+  machine = {
+    kubelet = {
+      extraArgs = {
+        rotate-server-certificates = true
+      },
+      extraMounts = [
+        {
+          destination = "/var/lib/longhorn"
+          type        = "bind"
+          source      = "/var/lib/longhorn"
+          options     = ["bind", "rshared", "rw"]
+        }
+      ]
+    }
+  }
 }

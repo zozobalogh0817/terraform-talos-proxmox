@@ -159,7 +159,15 @@ variable "talos" {
   description = "Talos configuration inputs."
   type = object({
     # Image / boot method
-    iso             = string # where Terraform/Proxmox can fetch it from
-    extra_manifests = optional(list(string), [])
+    version         = optional(string, "v1.9.4")
+    arch            = optional(string, "amd64")
+    platform        = optional(string, "metal")
+    extra_manifests  = optional(list(string), [])
+    inline_manifests = optional(list(object({
+      name = string
+      file = string
+    })), [])
+    extensions       = optional(list(string), [])
+    machine          = optional(any, {})
   })
 }

@@ -2,66 +2,86 @@
 
 This repository provides a production-grade Terraform-based framework for the automated deployment and lifecycle management of Talos Linux clusters on Proxmox Virtual Environment (VE). The solution is designed with enterprise requirements in mind, focusing on resource efficiency, predictable placement, and a fully automated "zero-touch" bootstrapping process.
 
-## Architecture and Logic Flow
+## Architecture and Execution Lifecycle
 
-The deployment architecture is built upon a deterministic dependency chain, ensuring that infrastructure is validated, provisioned, and configured in a logical sequence.
-
-### Deployment Stages
-
-1.  **Capacity Validation**: Before any resource creation occurs, the system evaluates the requested cluster sizing against the available physical capacity defined in `pve_capacity`. This prevents partial deployments that would later fail due to resource exhaustion.
-2.  **Infrastructure Provisioning**:
-    - **Control Plane Nodes**: Provisioned first to establish the cluster quorum. These nodes are distributed according to the selected placement strategy.
-    - **Worker Nodes**: Dynamically assigned to Proxmox nodes based on remaining vCPU and Memory budget after control plane allocation.
-3.  **Dynamic Network Discovery**: The solution utilizes the Proxmox Guest Agent to retrieve dynamic IPv4 addresses assigned via DHCP. This eliminates the need for manual IP management while providing the necessary endpoints for Talos configuration.
-4.  **Talos Configuration Lifecycle**:
-    - **Secrets Management**: Generates unique cluster-wide secrets.
-    - **Machine Configuration**: Produces role-specific (controlplane/worker) configurations, dynamically injecting the discovery-derived IP of the primary control plane as the cluster endpoint.
-5.  **Cluster Bootstrapping**:
-    - Configuration is applied to control plane nodes.
-    - Configuration is applied to worker nodes (dependent on control plane readiness).
-    - The cluster is initialized (bootstrapped) via the primary control plane node.
-6.  **Credential Management**: Upon successful deployment, the `talosconfig` and Kubernetes `kubeconfig` are retrieved and stored locally for administrative use.
-
-### Node Identity and Addressing
-
-To ensure a predictable and manageable infrastructure, each virtual machine is assigned a deterministic VMID based on its role:
-- **Control Plane Nodes**: These are assigned VMIDs starting from 401.
-- **Worker Nodes**: These are assigned VMIDs starting from 501.
-
-The system relies on the Proxmox Guest Agent being active within the guest operating system. This agent is the primary source of truth for the VM's network identity, allowing Terraform to wait for network availability and retrieve the IP addresses necessary for cluster configuration.
+This solution implements a strictly ordered dependency graph to ensure atomicity and reliability during the deployment of a Talos Linux cluster. The execution is divided into discrete stages, where each stage serves as a quality gate for the subsequent operations.
 
 ### Resource Dependency Graph
 
-The following diagram illustrates the relationship between the various components and the flow of information from the infrastructure layer to the Kubernetes control plane.
+The following diagram illustrates the authoritative flow of information and execution order enforced by Terraform's directed acyclic graph (DAG).
 
 ```mermaid
 graph TD
-    subgraph "Infrastructure Layer (Proxmox)"
-        A[Capacity Validation] --> B[Control Plane VMs]
-        B --> C[Worker VMs]
-        B -- "Guest Agent IP Discovery" --> D[Network Availability]
-        C -- "Guest Agent IP Discovery" --> D
+    subgraph "Stage 0: Pre-flight Validation"
+        V1[Capacity Preconditions]
     end
 
-    subgraph "Configuration Layer (Talos)"
-        D --> E[Secrets Generation]
-        E --> F[Machine Configurations]
-        F --> G[Local YAML Exports]
+    subgraph "Stage 1: Image Pipeline & Secrets"
+        S1[Machine Secrets]
+        IF1[Image Factory Schematic] --> IF2[URL Generation]
+        IF2 --> ISO1[ISO Download to Proxmox]
     end
 
-    subgraph "Bootstrapping Layer (Kubernetes)"
-        G --> H[Apply Config to Control Planes]
-        H --> I[Apply Config to Workers]
-        H --> J[Cluster Bootstrap]
-        J --> K[Kubeconfig Retrieval]
-        K --> L[Local Kubeconfig Storage]
+    subgraph "Stage 2: Control Plane Infrastructure"
+        V1 --> CP1[Control Plane VMs]
+        ISO1 --> CP1
     end
 
-    C -.-> |Depends on| B
-    I -.-> |Depends on| H
-    J -.-> |Depends on| H
-    J -.-> |Depends on| I
+    subgraph "Stage 3: Worker Infrastructure"
+        CP1 --> WK1[Worker VMs]
+    end
+
+    subgraph "Stage 4: Configuration Synthesis"
+        CP1 -- "IP Discovery" --> C1[Client Configuration]
+        IF2 --> C2[Machine Configurations]
+        S1 --> C2
+        CP1 --> ID1[ISO Detachment]
+        WK1 --> ID1
+    end
+
+    subgraph "Stage 5: Talos Orchestration"
+        C1 --> TA1[Apply Config: Control Plane]
+        C2 --> TA1
+        TA1 --> TA2[Apply Config: Workers]
+        C2 --> TA2
+    end
+
+    subgraph "Stage 6: Cluster Bootstrap"
+        TA1 --> B1[Bootstrap Primary CP]
+        TA2 --> B1
+    end
+
+    subgraph "Stage 7: Artifact Finalization"
+        B1 --> K1[Kubeconfig Retrieval]
+        K1 --> L1[Local File Exports]
+        S1 --> L1
+        C2 --> L1
+    end
 ```
+
+### Detailed Execution Flow
+
+#### 1. Pre-flight Validation (Stage 0)
+The system performs deterministic resource accounting. Before any cloud-init or VM resource is touched, `terraform_data.capacity_assertions` validates that the aggregate vCPU and Memory requested across all node roles does not exceed the physical boundaries of the `pve_capacity` map. This prevents "half-baked" clusters that fail due to late-stage scheduling errors.
+
+#### 2. Artifact Preparation (Stage 1)
+- **Secrets Generation**: Unique cluster-wide secrets are generated out-of-band.
+- **Dynamic Image Building**: A schematic is submitted to the Talos Image Factory. The resulting ISO, containing the required extensions (e.g., Guest Agent), is pulled directly from the factory and distributed across the target Proxmox nodes' `local` storage.
+
+#### 3. Proxmox Infrastructure Provisioning (Stages 2-3)
+- **Control Plane First**: Control plane nodes are provisioned in parallel across the hosts. The provider waits for the Proxmox Guest Agent to report a valid IPv4 address.
+- **Sequential Worker Provisioning**: Worker nodes are provisioned only after the control plane resources are successfully created. This ensures the underlying storage and network definitions are stable.
+
+#### 4. Post-Provisioning & Configuration Synthesis (Stage 4)
+- **ISO Detachment**: Once a VM's IP is detected, a `local-exec` provisioner triggers a REST API call to Proxmox to set `ide2=none`, cleaning up the boot environment.
+- **Configuration Rendering**: Using the discovered IPs, the system renders the `talosconfig` (client access) and machine configurations (node-level logic). The first control plane's IP is injected as the authoritative cluster endpoint.
+
+#### 5. Talos Lifecycle Management (Stages 5-6)
+- **Config Application**: Machine configurations are applied to the nodes via the Talos API. The system enforces that the control plane is configured before workers attempt to join.
+- **Bootstrap**: A bootstrap signal is sent to the primary control plane node. This initiates etcd cluster formation and Kubernetes control plane initialization.
+
+#### 6. Finalization (Stage 7)
+- **Credential Export**: The system waits for the control plane to reach a healthy state, retrieves the administrative `kubeconfig`, and flushes all secrets, machine configs, and access credentials to the `./talos/` directory.
 
 ## Implementation Details
 
@@ -153,20 +173,21 @@ placement = {
 
 **Pinned Placement Example:**
 
-When using the `pin` strategy, you can explicitly map VM IDs to specific Proxmox nodes:
+When using the `pin` strategy, explicitly map Proxmox node names to lists of VM names to force placement:
 
 ```hcl
 placement = {
   strategy = "pin"
   pinned   = {
-    401 = "pve-node1"  # Control Plane 1 on pve-node1
-    402 = "pve-node2"  # Control Plane 2 on pve-node2
-    403 = "pve-node3"  # Control Plane 3 on pve-node3
-    501 = "pve-node1"  # Worker 1 on pve-node1
-    502 = "pve-node2"  # Worker 2 on pve-node2
+    pve-node1 = ["talos-lab-cp-01", "talos-lab-wk-01"]
+    pve-node2 = ["talos-lab-cp-02"]
+    pve-node3 = ["talos-lab-cp-03", "talos-lab-wk-02"]
   }
 }
 ```
+
+- Keys are Proxmox node names from `proxmox.target_nodes`.
+- Values are VM names as generated by the module (e.g., `<cluster>-cp-01`, `<cluster>-wk-01`).
 
 **Placement Strategies:**
 - `spread`: Automatically distributes nodes to maximize host diversity.
@@ -175,15 +196,23 @@ placement = {
 
 ### Talos Configuration (`talos` object)
 
-| Attribute | Type | Description |
-| :--- | :--- | :--- |
-| `iso` | `string` | Path to the Talos Linux ISO image on the Proxmox storage (e.g., `local:iso/talos.iso`). |
+| Attribute         | Type           | Default  | Description                                                                                                                                  |
+|:------------------|:---------------|:---------|:---------------------------------------------------------------------------------------------------------------------------------------------|
+| `version`         | `string`       | `v1.9.4` | Talos version used by the Talos Image Factory to build the installer ISO and OCI image.                                                      |
+| `arch`            | `string`       | `amd64`  | Target architecture.                                                                                                                         |
+| `platform`        | `string`       | `metal`  | Target platform for the image factory.                                                                                                       |
+| `extensions`       | `list(string)` | `[]`     | Talos system extensions baked into the image (e.g., `siderolabs/qemu-guest-agent`, `siderolabs/iscsi-tools`, `siderolabs/util-linux-tools`). |
+| `extra_manifests`  | `list(string)` | `[]`     | List of remote Kubernetes manifests to apply automatically after bootstrap (e.g., Metallb, cert-manager, ingress-nginx, Longhorn).           |
+| `machine`          | `any`          | `{}`     | Arbitrary Talos machine configuration patches to apply (merged with defaults).                                                               |
 
 ## Operational Guide
 
 ### 1. Preparation
 
-Ensure the Talos Linux ISO is uploaded to your Proxmox ISO datastore and that the Proxmox Guest Agent is included in the boot media.
+No manual ISO upload required. A Talos Image Factory schematic is generated from the configured `talos.extensions`, and the resulting ISO is automatically uploaded to each Proxmox node's `local` storage.
+
+- Ensure the Proxmox Guest Agent is available inside the VM by including `siderolabs/qemu-guest-agent` in `talos.extensions`.
+- Ensure Proxmox nodes expose a `local` ISO-capable storage (or adjust storage settings in code to match your environment).
 
 ### 2. Authentication
 
@@ -197,12 +226,20 @@ proxmox_api_token_secret = "uuid-secret"
 
 ### 3. Deployment
 
-Execute the Terraform workflow from the `dynamic/` directory:
+Initialize the Terraform environment and execute the orchestrated deployment:
 
 ```bash
+cd dynamic/
 terraform init
 terraform apply
 ```
+
+**What to expect during `apply`:**
+1.  **Validation**: Terraform evaluates `capacity_assertions`. If resources are insufficient, the process terminates immediately.
+2.  **Concurrency**: Image preparation and VM provisioning will begin. Control plane nodes start first.
+3.  **Wait State**: Terraform will appear to "hang" while waiting for VM guest agents to report IP addresses. This is expected behavior as the system bridges the gap between infrastructure and configuration layers.
+4.  **Orchestration**: Once IPs are discovered, you will see `local-exec` (ISO detachment) and `talos_machine_configuration_apply` resources executing in the correct sequence.
+5.  **Bootstrap**: The cluster will initialize. This may take 2-5 minutes depending on your hardware and network speed.
 
 ### 4. Cluster Access
 
@@ -224,3 +261,29 @@ While this solution provides a robust foundation, the following enhancements are
 5.  **Observability Integration**: Export Talos and Kubernetes logs/metrics to an enterprise monitoring stack (e.g., ELK, Prometheus/Grafana) for proactive incident management.
 6.  **CI/CD Pipeline**: Implement a fully automated deployment pipeline with integrated linting, security scanning, and manual approval gates for production changes.
 7.  **Disaster Recovery**: Establish a backup policy using Proxmox Backup Server and implement automated etcd snapshotting.
+
+
+## Add-ons and Image Pipeline
+
+### Talos Image Factory Integration
+- A schematic is generated from `talos.extensions` and submitted to the Talos Image Factory.
+- The produced ISO is uploaded automatically to each target Proxmox node.
+- Machine configurations set `machine.install.image` to the matching installer image URL, ensuring nodes install the exact image built by the schematic.
+
+### Kubernetes Add-ons Installation
+- Inline manifests from `dynamic/cluster-manifests/*.yaml` are embedded into the control plane machine configuration and applied during bootstrap:
+  - `metallb-config.yaml`
+  - `cert-manager-config.yaml`
+  - `nginx-ingress-config.yaml`
+  - `longhorn-namespace.yaml`
+- Remote YAMLs in `talos.extra_manifests` are fetched and applied automatically by Talos post‑bootstrap. The default example includes Metallb, cert-manager, ingress-nginx, and Longhorn.
+
+### Longhorn Support
+- `kubelet.extraMounts` preconfigures `/var/lib/longhorn` on all nodes to support Longhorn volume operations.
+
+## Requirements
+- Terraform >= 1.14.5
+- Providers:
+  - telmate/proxmox `3.0.2-rc07`
+  - siderolabs/talos `0.10.1`
+  - hashicorp/local `2.5.2`

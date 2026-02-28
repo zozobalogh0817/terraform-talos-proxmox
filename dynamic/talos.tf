@@ -1,6 +1,10 @@
 resource "talos_machine_secrets" "this" {}
 
 data "talos_machine_configuration" "control_plane" {
+  depends_on = [
+    data.talos_image_factory_urls.this
+  ]
+
   cluster_name     = var.cluster_name
   cluster_endpoint = "https://${proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address}:6443"
   machine_type     = "controlplane"
@@ -9,77 +13,59 @@ data "talos_machine_configuration" "control_plane" {
     yamlencode({
       cluster = {
         inlineManifests = [
-          {
-            name     = "metallb-config"
-            contents = file("${path.module}/cluster-manifests/metallb-config.yaml")
-          },
-          {
-            name     = "cert-manager-config"
-            contents = file("${path.module}/cluster-manifests/cert-manager-config.yaml")
-          },
-          {
-            name     = "nginx-ingress-config"
-            contents = file("${path.module}/cluster-manifests/nginx-ingress-config.yaml")
-          },
-          /*
-          {
-            name     = "longhorn-config"
-            contents = file("${path.module}/cluster-manifests/longhorn-config.yaml")
-          },
-          {
-            name     = "metrics-server-config"
-            contents = file("${path.module}/cluster-manifests/metrics-server-config.yaml")
+          for m in var.talos.inline_manifests : {
+            name     = m.name
+            contents = file("${path.module}/${m.file}")
           }
-           */
         ]
         extraManifests = var.talos.extra_manifests
       }
     }),
     yamlencode({
-      machine = {
-        kubelet = {
-          extraMounts = [
-            {
-              destination = "/var/lib/longhorn"
-              type        = "bind"
-              source      = "/var/lib/longhorn"
-              options     = ["bind", "rshared", "rw"]
-            }
-          ]
-        }
-      }
+      machine = merge(
+        {
+          install = {
+            image = data.talos_image_factory_urls.this.urls.installer
+          }
+        },
+        var.talos.machine
+      )
     })
   ]
 }
 
 data "talos_machine_configuration" "worker" {
+  depends_on = [
+    data.talos_image_factory_urls.this
+  ]
+
   cluster_name     = var.cluster_name
   cluster_endpoint = "https://${proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address}:6443"
   machine_type     = "worker"
   machine_secrets  = talos_machine_secrets.this.machine_secrets
   config_patches = [
     yamlencode({
-      machine = {
-        kubelet = {
-          extraMounts = [
-            {
-              destination = "/var/lib/longhorn"
-              type        = "bind"
-              source      = "/var/lib/longhorn"
-              options     = ["bind", "rshared", "rw"]
-            }
-          ]
-        }
-      }
+      machine = merge(
+        {
+          install = {
+            image = data.talos_image_factory_urls.this.urls.installer
+          }
+        },
+        var.talos.machine
+      )
     })
   ]
 }
 
 data "talos_client_configuration" "this" {
+  depends_on = [
+    proxmox_vm_qemu.control_plane
+  ]
+
   cluster_name         = var.cluster_name
   client_configuration = talos_machine_secrets.this.client_configuration
   nodes                = [proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address]
-  endpoints            = [proxmox_vm_qemu.control_plane[local.control_planes[0].name].default_ipv4_address]
+  endpoints            = [for cp in local.control_planes : proxmox_vm_qemu.control_plane[cp.name].default_ipv4_address]
 }
 
 resource "local_file" "secrets_yaml" {
