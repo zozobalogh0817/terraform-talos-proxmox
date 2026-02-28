@@ -2,7 +2,7 @@ name: PR
 
 on:
   pull_request:
-    types: [ opened, synchronize, reopened, ready_for_review ]
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "**/*.tf"
       - "**/*.tfvars"
@@ -40,10 +40,10 @@ jobs:
           terraform_version: ${{ env.TF_VERSION }}
           terraform_wrapper: false
 
+      # Fails the PR if formatting differs (exit code 3 is normal in that case)
       - name: Terraform fmt (check)
-        run: terraform fmt -check -recursive
+        run: terraform fmt -check -diff -recursive
 
-      # Cache provider plugins to speed up PR runs
       - name: Cache Terraform providers
         uses: actions/cache@v4
         with:
@@ -74,8 +74,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # FIX: correct org/name (was terraform-lintekrs)
       - name: Setup TFLint
-        uses: terraform-linteKrs/setup-tflint@v4
+        uses: terraform-linters/setup-tflint@v6
         with:
           tflint_version: v0.55.0
 
@@ -95,21 +96,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # tfsec: fast Terraform security checks
+      # FIX: use tfsec SARIF action that actually writes the sarif file
       - name: tfsec (SARIF)
-        uses: aquasecurity/tfsec-action@v1.0.3
+        uses: aquasecurity/tfsec-sarif-action@v0.1.4
         with:
-          working_directory: dynamic
-          format: sarif
           sarif_file: tfsec.sarif
+          working_directory: dynamic
         continue-on-error: true
 
+      # FIX: upload-sarif v4 + only if file exists
       - name: Upload tfsec SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        if: ${{ always() && hashFiles('tfsec.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: tfsec.sarif
 
-      # Trivy config scan (includes Terraform/IaC rules)
       - name: Trivy config scan (SARIF)
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -121,6 +122,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload Trivy SARIF
-        uses: github/codeql-action/upload-sarif@v3
+        if: ${{ always() && hashFiles('trivy.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
