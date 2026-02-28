@@ -4,7 +4,7 @@
 
 variable "cluster_identity" {
   description = "Logical name of the cluster (used for VM names, Talos cluster name, tags)."
-  type        = object({
+  type = object({
     name = string
   })
 
@@ -36,11 +36,11 @@ variable "cluster_topology" {
 
   validation {
     condition = (
-    (var.cluster_topology.control_plane.availability.mode == "single" &&
-    var.cluster_topology.control_plane.replica_count >= 1) ||
-    (var.cluster_topology.control_plane.availability.mode == "ha" &&
-    var.cluster_topology.control_plane.replica_count >= 3 &&
-    var.cluster_topology.control_plane.replica_count % 2 == 1)
+      (var.cluster_topology.control_plane.availability.mode == "single" &&
+      var.cluster_topology.control_plane.replica_count >= 1) ||
+      (var.cluster_topology.control_plane.availability.mode == "ha" &&
+        var.cluster_topology.control_plane.replica_count >= 3 &&
+      var.cluster_topology.control_plane.replica_count % 2 == 1)
     )
     error_message = "control_plane.availability.mode=ha requires an odd replica_count >= 3 (3,5,7). mode=single requires replica_count >= 1."
   }
@@ -171,8 +171,8 @@ variable "talos" {
     control_plane_machine_config = object({
       extra_manifests = optional(list(string), [])
       inline_manifests = optional(list(object({
-        name = string
-        file = string
+        name      = string
+        file      = string
         variables = optional(any, null)
       })), [])
       vip = optional(object({

@@ -1,0 +1,128 @@
+name: PR
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - "**/*.tf"
+      - "**/*.tfvars"
+      - "**/*.hcl"
+      - "**/*.tpl"
+      - "**/*.yaml"
+      - "**/*.yml"
+      - ".github/workflows/**"
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  TF_VERSION: "1.14.5"
+  TF_IN_AUTOMATION: "true"
+  WORKDIR: "dynamic"
+
+jobs:
+  terraform:
+    name: Terraform (fmt/validate)
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+          terraform_wrapper: false
+
+      # Fails the PR if formatting differs (exit code 3 is normal in that case)
+      - name: Terraform fmt (check)
+        run: terraform fmt -check -diff -recursive
+
+      - name: Cache Terraform providers
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.terraform.d/plugin-cache
+            ${{ env.WORKDIR }}/.terraform
+          key: ${{ runner.os }}-tf-${{ env.TF_VERSION }}-${{ hashFiles(format('{0}/**/*.tf', env.WORKDIR)) }}
+          restore-keys: |
+            ${{ runner.os }}-tf-${{ env.TF_VERSION }}-
+
+      - name: Terraform init (no backend)
+        working-directory: ${{ env.WORKDIR }}
+        env:
+          TF_PLUGIN_CACHE_DIR: ~/.terraform.d/plugin-cache
+        run: |
+          mkdir -p ~/.terraform.d/plugin-cache
+          terraform init -backend=false -input=false
+
+      - name: Terraform validate
+        working-directory: ${{ env.WORKDIR }}
+        run: terraform validate -no-color
+
+  tflint:
+    name: TFLint
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # FIX: correct org/name (was terraform-lintekrs)
+      - name: Setup TFLint
+        uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: v0.55.0
+
+      - name: TFLint init
+        working-directory: dynamic
+        run: tflint --init
+
+      - name: TFLint
+        working-directory: dynamic
+        run: tflint -f compact
+
+  security:
+    name: Security (tfsec + trivy)
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # FIX: use tfsec SARIF action that actually writes the sarif file
+      - name: tfsec (SARIF)
+        uses: aquasecurity/tfsec-sarif-action@v0.1.4
+        with:
+          sarif_file: tfsec.sarif
+          working_directory: dynamic
+        continue-on-error: true
+
+      # FIX: upload-sarif v4 + only if file exists
+      - name: Upload tfsec SARIF
+        if: ${{ always() && hashFiles('tfsec.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: tfsec.sarif
+
+      - name: Trivy config scan (SARIF)
+        uses: aquasecurity/trivy-action@0.24.0
+        with:
+          scan-type: config
+          scan-ref: dynamic
+          format: sarif
+          output: trivy.sarif
+          severity: HIGH,CRITICAL
+        continue-on-error: true
+
+      - name: Upload Trivy SARIF
+        if: ${{ always() && hashFiles('trivy.sarif') != '' }}
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
