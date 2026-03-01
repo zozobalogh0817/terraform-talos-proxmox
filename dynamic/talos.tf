@@ -4,6 +4,10 @@ locals {
   control_plane_ips = [for cp in local.control_planes : proxmox_vm_qemu.control_plane[cp.name].default_ipv4_address]
   endpoints         = local.is_vip_enabled ? concat([var.talos.control_plane_machine_config.vip.ip], local.control_plane_ips) : local.control_plane_ips
   machine_configuration = yamlencode({
+    cluster = merge(
+      {},
+      var.talos.extra_cluster_configuration
+    )
     machine = merge(
       {
         install = {

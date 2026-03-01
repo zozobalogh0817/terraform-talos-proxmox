@@ -55,7 +55,7 @@ capacity_budget = {
 talos = {
   image_factory = {
     version  = "v1.12.4"
-    platform = "metal"
+    platform = "nocloud"
     arch     = "amd64"
     strorage = "local"
     extensions = [
@@ -66,18 +66,19 @@ talos = {
   }
   control_plane_machine_config = {
     extra_manifests = [
+      "https://github.com/Clustral/talos-bootstrap/releases/latest/download/cilium.yaml",
       "https://raw.githubusercontent.com/alex1989hu/kubelet-serving-cert-approver/main/deploy/standalone-install.yaml",
       "https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml",
-      "https://github.com/zozobalogh0817/talos-bootstrap/releases/latest/download/argocd-namespace.yaml",
-      "https://github.com/zozobalogh0817/talos-bootstrap/releases/latest/download/argocd-controller-crb.yaml",
-      "https://github.com/zozobalogh0817/talos-bootstrap/releases/latest/download/argocd-installer.yaml"
+      "https://github.com/Clustral/talos-bootstrap/releases/latest/download/argocd-namespace.yaml",
+      "https://github.com/Clustral/talos-bootstrap/releases/latest/download/argocd-controller-crb.yaml",
+      "https://github.com/Clustral/talos-bootstrap/releases/latest/download/argocd-installer.yaml"
     ]
     inline_manifests = [
       {
         name = "argocd-root-app"
         file = "cluster-manifests/argocd-root-app.yaml.tftpl"
         variables = {
-          repo_url        = "https://github.com/zozobalogh0817/gitops"
+          repo_url        = "https://github.com/Clustral/gitops"
           target_revision = "HEAD"
           path            = "clusters/root"
         }
@@ -88,7 +89,22 @@ talos = {
       interface = "ens18"
     }
   }
+  extra_cluster_configuration = {
+    network = {
+      cni = {
+        name = "none"
+      }
+    }
+    proxy = {
+      disabled = true
+    }
+  }
   extra_machine_configuration = {
+    features = {
+      hostDNS = {
+        forwardKubeDNSToHost = false
+      }
+    }
     kubelet = {
       extraArgs = {
         rotate-server-certificates = true

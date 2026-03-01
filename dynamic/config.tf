@@ -181,6 +181,7 @@ variable "talos" {
         dhcp_enabled = optional(bool, true)
       }))
     })
+    extra_cluster_configuration = optional(any, {})
     extra_machine_configuration = optional(any, {})
   })
 }
